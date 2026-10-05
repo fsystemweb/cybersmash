@@ -171,7 +171,194 @@ function drawSalesman(x, y, mood, t) {
 }
 
 // ---------------------------------------------------------------------
-// 5. Game state machine
+// 5. Debris: generic flying chunks (glass, panels, sparks). Reused by later juice work.
+// ---------------------------------------------------------------------
+const debris = [];
+// Spawns a chunk: pos, velocity, size, color, spin and lifetime (-1 = stays on the floor forever).
+function spawnDebris(x, y, vx, vy, w, h, color, life = 2.5, opts = {}) {
+  debris.push({ x, y, vx, vy, w, h, color, life, age: 0, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 12,
+                grounded: false, shape: opts.shape || 'rect', bounce: opts.bounce ?? 0.35 });
+}
+function updateDebris(dt) {
+  for (let i = debris.length - 1; i >= 0; i--) {
+    const d = debris[i];
+    d.age += dt;
+    if (!d.grounded) {
+      d.vy += 900 * dt;                        // gravity
+      d.x += d.vx * dt; d.y += d.vy * dt; d.rot += d.vr * dt;
+      const floor = GROUND_Y + 14 - d.h / 2;   // rest on the dock surface
+      if (d.y > floor) {
+        d.y = floor;
+        if (Math.abs(d.vy) > 80) { d.vy = -d.vy * d.bounce; d.vx *= 0.7; d.vr *= 0.6; }
+        else { d.grounded = true; d.vr = 0; d.vy = 0; }
+      }
+    }
+    if (d.life >= 0 && d.age > d.life) debris.splice(i, 1);
+  }
+}
+function drawDebris() {
+  for (const d of debris) {
+    // fade out in the last 0.5s of life
+    const fade = d.life >= 0 ? Math.min(1, (d.life - d.age) / 0.5) : 1;
+    ctx.save(); ctx.globalAlpha = fade;
+    ctx.translate(Math.round(d.x), Math.round(d.y)); ctx.rotate(d.rot);
+    ctx.fillStyle = d.color;
+    ctx.fillRect(-d.w / 2, -d.h / 2, d.w, d.h);
+    ctx.restore();
+  }
+}
+
+// ---------------------------------------------------------------------
+// 6. The CYBERCHUNK: an ugly, angular steel pickup (parody of a certain famous truck).
+//    Health 0..maxHp maps to 4 damage stages:
+//      0 pristine · 1 cracked windows (first hit) · 2 dents · 3 panels fall off · 4 collapsed + smoking battery
+// ---------------------------------------------------------------------
+const truck = {
+  x: 420, maxHp: 100, hp: 100,
+  stage: 0, wobble: 0, collapse: 0,   // collapse animates 0→1 when destroyed
+  dents: [], smoke: [], t: 0,
+  halfW: 110,                          // half width, used for hit range checks
+  reset() {
+    this.hp = this.maxHp; this.stage = 0; this.wobble = 0; this.collapse = 0;
+    this.dents.length = 0; this.smoke.length = 0; this.t = 0;
+  },
+  get destroyed() { return this.hp <= 0; },
+  // Which stage a given hp fraction corresponds to.
+  stageFor(hp) {
+    if (hp <= 0) return 4;
+    const f = hp / this.maxHp;
+    if (f <= 0.34) return 3;
+    if (f <= 0.67) return 2;
+    if (f < 1) return 1;
+    return 0;
+  },
+  // Apply damage; returns the actual damage dealt. Triggers stage transition effects.
+  hit(amount) {
+    if (this.destroyed) return 0;
+    const dealt = Math.min(this.hp, amount);
+    this.hp -= dealt;
+    this.wobble = 1;
+    // every hit leaves a dent on the body (drawn once stage >= 2)
+    this.dents.push({ x: -90 + Math.random() * 180, y: -62 + Math.random() * 36, r: 5 + Math.random() * 7 });
+    const next = this.stageFor(this.hp);
+    while (this.stage < next) { this.stage++; this.onStage(this.stage); }
+    return dealt;
+  },
+  // One-off effects when a new damage stage is reached.
+  onStage(st) {
+    const cx = this.x, by = GROUND_Y + 14;
+    if (st === 1) {           // the famous "unbreakable" window demo… breaks
+      for (let i = 0; i < 14; i++)
+        spawnDebris(cx - 30 + Math.random() * 90, by - 55, (Math.random() - 0.5) * 220, -Math.random() * 260, 4, 4, '#bfe9ff', 2.2);
+    } else if (st === 3) {    // doors, hood and bed panel fly off
+      const cols = ['#9aa1a9', '#8b929a', '#aab0b8'];
+      for (let i = 0; i < 4; i++)
+        spawnDebris(cx - 60 + i * 35, by - 40, (i < 2 ? -1 : 1) * (80 + Math.random() * 160), -260 - Math.random() * 120, 30, 22, cols[i % 3], -1);
+    } else if (st === 4) {    // frame collapses into a pile
+      for (let i = 0; i < 12; i++)
+        spawnDebris(cx + (Math.random() - 0.5) * 200, by - 40, (Math.random() - 0.5) * 300, -200 - Math.random() * 200, 6 + Math.random() * 10, 5 + Math.random() * 6, '#8b929a', -1);
+    }
+  },
+  update(dt) {
+    this.t += dt;
+    this.wobble = Math.max(0, this.wobble - dt * 5);
+    if (this.stage === 4) this.collapse = Math.min(1, this.collapse + dt * 3);
+    // smoking battery: puffs rise once collapsed
+    if (this.stage === 4 && this.collapse > 0.5 && Math.random() < dt * 14)
+      this.smoke.push({ x: this.x + 30 + Math.random() * 20, y: GROUND_Y - 8, r: 4, age: 0 });
+    for (let i = this.smoke.length - 1; i >= 0; i--) {
+      const s = this.smoke[i]; s.age += dt; s.y -= 28 * dt; s.x += Math.sin(s.age * 3 + i) * 8 * dt; s.r += 5 * dt;
+      if (s.age > 3) this.smoke.splice(i, 1);
+    }
+  },
+  // Draw the truck in local coords: origin at the bottom-center, +x to the right, nose points LEFT.
+  draw() {
+    const st = this.stage, c = this.collapse;
+    const shake = this.wobble * Math.sin(this.t * 60) * 3;
+    ctx.save();
+    ctx.translate(Math.round(this.x + shake), GROUND_Y + 14);
+    if (st === 4) ctx.scale(1, 1 - 0.62 * c);      // squash into a pile
+    // --- wheels (behind body) ---
+    const flat = st === 4 ? c : 0;
+    for (const wx of [-68, 66]) {
+      ctx.fillStyle = '#15171b'; ctx.fillRect(wx - 16, -32 + flat * 18, 32, 32 - flat * 18);
+      ctx.fillStyle = '#6a7079'; ctx.fillRect(wx - 7, -23 + flat * 12, 14, 14 - flat * 12);
+    }
+    // --- main body polygon: low nose, steep windshield, roof, long sloped rear ---
+    const body = [[-110, -26], [-104, -40], [-62, -46], [-12, -76], [56, -74], [112, -48], [112, -20], [-110, -20]];
+    const frameOnly = st >= 3;          // doors/hood gone: draw the bare frame instead of solid panels
+    ctx.beginPath(); ctx.moveTo(body[0][0], body[0][1]);
+    for (const [px, py] of body.slice(1)) ctx.lineTo(px, py);
+    ctx.closePath();
+    ctx.fillStyle = frameOnly ? '#3b4048' : '#a9afb7'; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = '#2c3036'; ctx.stroke();
+    if (!frameOnly) {
+      // flat facets give the harsh angular look
+      ctx.fillStyle = '#c9ced4';
+      ctx.beginPath(); ctx.moveTo(-62, -46); ctx.lineTo(-12, -76); ctx.lineTo(56, -74); ctx.lineTo(30, -44); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#8b9199'; ctx.fillRect(-108, -34, 218, 10);       // lower rocker shade
+      // door seams + handles
+      ctx.fillStyle = '#2c3036'; ctx.fillRect(-14, -48, 2, 26); ctx.fillRect(40, -48, 2, 26);
+      ctx.fillStyle = '#e8eaed'; ctx.fillRect(-26, -40, 8, 3); ctx.fillRect(28, -40, 8, 3);
+    } else {
+      // exposed frame bars where panels used to be
+      ctx.fillStyle = '#6b727b';
+      for (let i = 0; i < 5; i++) ctx.fillRect(-90 + i * 46, -46, 5, 26);
+      ctx.fillRect(-104, -36, 214, 4);
+    }
+    // --- windows (stage 0 clean · 1+ cracked · 3+ shattered out) ---
+    if (st < 3) {
+      const win = [[-56, -48], [-14, -72], [54, -71], [90, -50]];
+      ctx.beginPath(); ctx.moveTo(win[0][0], win[0][1]);
+      for (const [px, py] of win.slice(1)) ctx.lineTo(px, py);
+      ctx.closePath(); ctx.fillStyle = st === 0 ? '#2a3b52' : '#3b5069'; ctx.fill();
+      if (st === 0) { ctx.fillStyle = 'rgba(255,255,255,.25)'; ctx.fillRect(-30, -66, 14, 3); }
+      else {                           // spiderweb cracks from the impact point
+        ctx.strokeStyle = '#e6f4ff'; ctx.lineWidth = 1.5; ctx.beginPath();
+        const cr = [[12, -60, -20, -52], [12, -60, 40, -70], [12, -60, 30, -50], [12, -60, 0, -72], [12, -60, 60, -58],
+                    [12, -60, -40, -56], [-20, -52, -30, -50], [40, -70, 52, -68]];
+        for (const [x1, y1, x2, y2] of cr) { ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); }
+        ctx.stroke();
+      }
+    }
+    // --- dents (stage 2+): dark crater with a bright rim ---
+    if (st >= 2 && st < 3) {
+      for (const d of this.dents) {
+        ctx.fillStyle = 'rgba(40,44,52,.55)'; ctx.fillRect(d.x - d.r, d.y - d.r * 0.6, d.r * 2, d.r * 1.2);
+        ctx.fillStyle = 'rgba(255,255,255,.45)'; ctx.fillRect(d.x - d.r, d.y - d.r * 0.6, d.r * 2, 2);
+      }
+    }
+    // --- lights ---
+    if (st < 4) { ctx.fillStyle = '#fff6a8'; ctx.fillRect(-110, -33, 6, 4); ctx.fillStyle = '#ff3b3b'; ctx.fillRect(108, -38, 4, 8); }
+    // --- smoking battery pack (stage 4) ---
+    if (st === 4) {
+      ctx.fillStyle = '#20242a'; ctx.fillRect(10, -46, 70, 26 / Math.max(0.4, 1 - 0.62 * c));
+      ctx.fillStyle = '#ffd23a'; ctx.fillRect(18, -44, 8, 4); ctx.fillRect(34, -44, 8, 4);   // warning stripes
+      if (Math.floor(this.t * 8) % 2) { ctx.fillStyle = '#ff7a1a'; ctx.fillRect(52, -50, 4, 4); }  // spark
+    }
+    ctx.restore();
+    // smoke is drawn in screen space
+    for (const s of this.smoke) {
+      ctx.globalAlpha = Math.max(0, 0.6 - s.age / 5);
+      ctx.fillStyle = '#555'; ctx.beginPath(); ctx.arc(Math.round(s.x), Math.round(s.y), s.r, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  },
+};
+
+// Health bar with the truck name (top-left). Color shifts green→yellow→red.
+function drawTruckBar() {
+  const x = 16, y = 14, w = 220, h = 14, f = Math.max(0, truck.hp / truck.maxHp);
+  text('CYBERCHUNK', x, y - 1, 10, '#fff', 'left');
+  rect(x - 2, y + 7, w + 4, h + 4, '#000');
+  rect(x, y + 9, w, h, '#3a1111');
+  rect(x, y + 9, w * f, h, f > 0.6 ? '#3fd35a' : f > 0.3 ? '#f2c21b' : '#e5352b');
+  rect(x, y + 9, w * f, 3, 'rgba(255,255,255,.35)');        // glossy highlight
+  for (let i = 1; i < 4; i++) rect(x + (w * i) / 4 - 1, y + 9, 2, h, 'rgba(0,0,0,.5)');  // stage ticks
+}
+
+// ---------------------------------------------------------------------
+// 7. Game state machine
 //    Each state is {enter(), update(dt), draw()}. PRs 2+ add more states.
 // ---------------------------------------------------------------------
 const states = {};
@@ -187,7 +374,7 @@ states.title = {
   enter() { this.t = 0; },
   update(dt) {
     this.t += dt;
-    if (pressed.confirm) { /* next PR: go to character select */ }
+    if (pressed.confirm) setState('game');
   },
   draw() {
     drawBackground();
@@ -201,8 +388,24 @@ states.title = {
   },
 };
 
+
+// Gameplay state. (Fighter, timer and scoring are added in the following PRs.)
+states.game = {
+  enter() { truck.reset(); debris.length = 0; },
+  update(dt) {
+    truck.update(dt); updateDebris(dt);
+    if (pressed.back) setState('title');
+  },
+  draw() {
+    drawBackground();
+    drawSalesman(590, GROUND_Y, truck.stage >= 3 ? 2 : truck.stage >= 1 ? 1 : 0, truck.t);
+    truck.draw(); drawDebris();
+    drawTruckBar();
+  },
+};
+
 // ---------------------------------------------------------------------
-// 6. Main loop: fixed 60 Hz update, render every animation frame
+// 8. Main loop: fixed 60 Hz update, render every animation frame
 // ---------------------------------------------------------------------
 const STEP = 1 / 60;
 let last = performance.now(), acc = 0;
