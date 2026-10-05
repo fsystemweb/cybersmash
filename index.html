@@ -358,7 +358,141 @@ function drawTruckBar() {
 }
 
 // ---------------------------------------------------------------------
-// 7. Game state machine
+// 7. The fighter: movement, punch / kick attacks and hit detection
+// ---------------------------------------------------------------------
+// Tunable combat numbers. Damage is in "truck health units" (truck has 100).
+const MOVES = {
+  //          startup  active  recover  damage  reach(px from fighter x to truck nose)
+  punch: { startup: 0.06, active: 0.08, recover: 0.12, dmg: 1.0, reach: 34 },
+  kick:  { startup: 0.12, active: 0.10, recover: 0.20, dmg: 1.5, reach: 56 },   // slower, longer, 1.5x
+};
+const SCORE_PER_DAMAGE = 100;      // points = damage dealt * 100
+const MOVE_SPEED = 130;            // px / second
+const BUFFER_TIME = 0.12;          // an attack pressed this early before recovery ends still fires
+
+// Default look; the character-select PR replaces this with six caricatures.
+const DEFAULT_LOOK = { skin: '#f2c9a0', hair: '#5a3a1a', shirt: '#2f6fd1', pants: '#2a2f4a', shoes: '#e8e8e8', head: null };
+
+const fighter = {
+  x: 120, facing: 1,                 // always faces the truck (right)
+  look: DEFAULT_LOOK,
+  walkT: 0, moving: false,
+  attack: null,                      // {type, t, hitDone} while attacking
+  buffered: null, bufferT: 0,
+  hits: 0, score: 0,
+  reset(x) {
+    this.x = x; this.walkT = 0; this.moving = false; this.attack = null;
+    this.buffered = null; this.bufferT = 0; this.hits = 0; this.score = 0;
+  },
+  // Distance (px) from the fighter to the truck's nose; the hit range check uses this.
+  distToTruck() { return (truck.x - truck.halfW) - this.x; },
+  // Total duration of the current attack
+  attackLen(a) { const m = MOVES[a.type]; return m.startup + m.active + m.recover; },
+  startAttack(type) { this.attack = { type, t: 0, hitDone: false }; },
+  // Called from update with the player's intent. `canAct` is false while the round is not live.
+  update(dt, canAct) {
+    // --- buffer attack presses so mashing feels responsive ---
+    if (canAct) {
+      if (pressed.punch) { this.buffered = 'punch'; this.bufferT = BUFFER_TIME; }
+      if (pressed.kick)  { this.buffered = 'kick';  this.bufferT = BUFFER_TIME; }
+    }
+    this.bufferT -= dt; if (this.bufferT <= 0) this.buffered = null;
+
+    if (this.attack) {
+      const a = this.attack, m = MOVES[a.type];
+      a.t += dt;
+      // The hit lands once, the first frame the active window opens.
+      if (!a.hitDone && a.t >= m.startup) { a.hitDone = true; this.resolveHit(a.type); }
+      if (a.t >= this.attackLen(a)) this.attack = null;
+    }
+    if (!this.attack && this.buffered && canAct) { this.startAttack(this.buffered); this.buffered = null; }
+
+    // --- walking (not while swinging; keeps attacks committal) ---
+    this.moving = false;
+    if (!this.attack && canAct) {
+      const dir = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+      if (dir) { this.x += dir * MOVE_SPEED * dt; this.moving = true; this.walkT += dt * 12; }
+    }
+    // Stay on the dock and never walk through the truck's nose.
+    this.x = Math.max(30, Math.min(truck.x - truck.halfW - 4, this.x));
+  },
+  // Range check + apply damage. Returns true if the truck was hit.
+  resolveHit(type) {
+    const m = MOVES[type];
+    if (truck.destroyed || this.distToTruck() > m.reach) return false;   // whiff: out of range
+    const dealt = truck.hit(m.dmg);
+    this.hits++; this.score += Math.round(dealt * SCORE_PER_DAMAGE);
+    onTruckHit(type, dealt, this.x + this.facing * m.reach, GROUND_Y - 26);
+    return true;
+  },
+  // Normalized 0..1 extension of the limb: ramps up during startup, held while active, eases back in recovery.
+  extension() {
+    const a = this.attack; if (!a) return 0;
+    const m = MOVES[a.type];
+    if (a.t < m.startup) return a.t / m.startup;
+    if (a.t < m.startup + m.active) return 1;
+    return Math.max(0, 1 - (a.t - m.startup - m.active) / m.recover);
+  },
+  // Chibi body: big head, small torso, stubby limbs. Origin = feet center.
+  draw() {
+    const L = this.look, ext = this.extension();
+    const kicking = this.attack && this.attack.type === 'kick';
+    const punching = this.attack && this.attack.type === 'punch';
+    const bob = this.moving ? Math.abs(Math.sin(this.walkT)) * 2 : Math.sin(truck.t * 4) * 0.8;
+    ctx.save();
+    ctx.translate(Math.round(this.x), GROUND_Y + 14);
+    // ground shadow
+    ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(-16, -2, 32, 4);
+    const sw = this.moving ? Math.sin(this.walkT) * 5 : 0;      // leg swing while walking
+    // --- back leg & front leg (kick uses the front leg) ---
+    ctx.lineWidth = 6; ctx.lineCap = 'butt';
+    ctx.strokeStyle = L.pants;
+    ctx.beginPath(); ctx.moveTo(-3, -16 - bob); ctx.lineTo(-3 - sw, -2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(4, -16 - bob);
+    if (kicking) ctx.lineTo(4 + ext * (MOVES.kick.reach - 8), -16 - ext * 12);
+    else ctx.lineTo(4 + sw, -2);
+    ctx.stroke();
+    // shoes
+    ctx.fillStyle = L.shoes;
+    ctx.fillRect(-8 - sw, -4, 9, 4);
+    if (kicking) ctx.fillRect(4 + ext * (MOVES.kick.reach - 8) - 2, -16 - ext * 12 - 4, 9, 8);
+    else ctx.fillRect(1 + sw, -4, 9, 4);
+    // --- torso ---
+    ctx.fillStyle = L.shirt; ctx.fillRect(-9, -32 - bob, 18, 18);
+    ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.fillRect(-9, -18 - bob, 18, 4);
+    if (L.torso) L.torso(ctx, -bob, this);       // character-specific details (tie, jacket…)
+    // --- back arm (swings opposite to legs) ---
+    ctx.strokeStyle = L.shirt; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(-8, -29 - bob); ctx.lineTo(-10 + sw * 0.6, -17 - bob); ctx.stroke();
+    ctx.fillStyle = L.skin; ctx.fillRect(-13 + sw * 0.6, -19 - bob, 6, 6);
+    // --- head (oversized) ---
+    ctx.fillStyle = L.skin; ctx.fillRect(-14, -58 - bob, 28, 26);
+    ctx.fillStyle = L.hair; ctx.fillRect(-15, -60 - bob, 30, 8); ctx.fillRect(-15, -60 - bob, 6, 18);
+    // eyes look toward the truck; squint while attacking
+    ctx.fillStyle = '#fff'; ctx.fillRect(2, -49 - bob, 8, 7); ctx.fillRect(-9, -49 - bob, 7, 7);
+    ctx.fillStyle = '#000'; ctx.fillRect(6, -47 - bob, 4, 4); ctx.fillRect(-5, -47 - bob, 4, 4);
+    ctx.fillRect(-3, -38 - bob, 10, 2);                          // mouth
+    if (this.attack) ctx.fillRect(-4, -39 - bob, 12, 4);          // yelling
+    if (L.head) L.head(ctx, -bob, this);        // character-specific hair/accessories
+    // --- front arm: the punching arm extends toward the truck ---
+    ctx.strokeStyle = L.shirt; ctx.lineWidth = 5;
+    const fx = punching ? 10 + ext * (MOVES.punch.reach - 10) : 12;
+    const fy = punching ? -27 - bob : -18 - bob;
+    ctx.beginPath(); ctx.moveTo(8, -29 - bob); ctx.lineTo(fx, fy); ctx.stroke();
+    ctx.fillStyle = L.skin; ctx.fillRect(fx - 2, fy - 4, 8, 8);   // fist
+    ctx.restore();
+  },
+};
+
+// Called for every landed hit; later PRs hang scoring/juice off this.
+function onTruckHit(type, dealt, px, py) {
+  // sparks flying from the impact point
+  for (let i = 0; i < 6; i++)
+    spawnDebris(px, py, 40 + Math.random() * 180, -Math.random() * 220, 3, 3, i % 2 ? '#ffe14a' : '#d0d5db', 0.7);
+}
+
+// ---------------------------------------------------------------------
+// 8. Game state machine
 //    Each state is {enter(), update(dt), draw()}. PRs 2+ add more states.
 // ---------------------------------------------------------------------
 const states = {};
@@ -389,23 +523,26 @@ states.title = {
 };
 
 
-// Gameplay state. (Fighter, timer and scoring are added in the following PRs.)
+// Gameplay state. (Timer, scoring screens and specials are added in the following PRs.)
 states.game = {
-  enter() { truck.reset(); debris.length = 0; },
+  enter() { truck.reset(); debris.length = 0; fighter.reset(110); },
   update(dt) {
+    fighter.update(dt, !truck.destroyed);
     truck.update(dt); updateDebris(dt);
     if (pressed.back) setState('title');
   },
   draw() {
     drawBackground();
     drawSalesman(590, GROUND_Y, truck.stage >= 3 ? 2 : truck.stage >= 1 ? 1 : 0, truck.t);
-    truck.draw(); drawDebris();
+    truck.draw(); fighter.draw(); drawDebris();
     drawTruckBar();
+    text('SCORE ' + String(fighter.score).padStart(6, '0'), W - 16, 20, 14, '#fff', 'right');
+    text('A/D MOVE   J PUNCH   K KICK', W / 2, H - 14, 11, '#fff');
   },
 };
 
 // ---------------------------------------------------------------------
-// 8. Main loop: fixed 60 Hz update, render every animation frame
+// 9. Main loop: fixed 60 Hz update, render every animation frame
 // ---------------------------------------------------------------------
 const STEP = 1 / 60;
 let last = performance.now(), acc = 0;
