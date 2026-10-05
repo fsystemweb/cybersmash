@@ -1032,16 +1032,20 @@ states.title = {
   },
   draw() {
     drawBackground();
-    drawSalesman(520, GROUND_Y, 1, this.t);
+    drawSalesman(590, GROUND_Y, 1, this.t);
+    // a showcase of the roster strolling in front of the dock
+    CHARACTERS.forEach((ch, i) => fighter.draw({ x: 70 + i * 64, y: GROUND_Y + 14, scale: 1, look: ch.look, celebrate: Math.floor(this.t * 1.5 + i) % 6 === i }));
     // big title with a bobbing shadow
     const bob = Math.sin(this.t * 3) * 3;
-    text('CYBER', W / 2, 70 + bob, 56, '#ffe14a', 'center', '#7a1d1d');
-    text('SMASH', W / 2, 120 + bob, 56, '#ff5a3c', 'center', '#3a0d0d');
-    text('Wreck the CYBERCHUNK in 40 seconds!', W / 2, 168, 14, '#fff');
-    if (Math.floor(this.t * 2) % 2 === 0) text('PRESS SPACE / ENTER', W / 2, 330, 16, '#fff');
+    text('CYBER', W / 2, 62 + bob, 56, '#ffe14a', 'center', '#7a1d1d');
+    text('SMASH', W / 2, 112 + bob, 56, '#ff5a3c', 'center', '#3a0d0d');
+    rect(0, 146, W, 24, 'rgba(0,0,0,.55)');
+    text('Wreck the CYBERCHUNK in 40 seconds. No tools. No refunds.', W / 2, 158, 12, '#fff');
+    if (bestScore > 0) text('BEST SCORE ' + bestScore, W / 2, 186, 14, '#ff9ad5');
+    if (Math.floor(this.t * 2) % 2 === 0) text('PRESS SPACE / ENTER', W / 2, 224, 18, '#fff');
+    text('A/D MOVE   J PUNCH   K KICK   L SPECIAL   M MUTE', W / 2, 338, 10, '#fff');
   },
 };
-
 
 // Character select: a row of six portraits, info panel for the highlighted fighter.
 states.select = {
