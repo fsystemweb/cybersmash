@@ -209,6 +209,56 @@ function drawDebris() {
 }
 
 // ---------------------------------------------------------------------
+// 5b. Juice: screen shake, freeze frames, comic text pops, impact bursts and a white flash.
+//     Everything here is purely cosmetic; gameplay code only calls the small helpers below.
+// ---------------------------------------------------------------------
+let shakeAmt = 0;            // pixels of random camera offset; decays quickly
+let freezeT = 0;             // seconds of "hit stop" left: the whole simulation pauses while > 0
+let flashA = 0;              // 0..1 white screen flash
+const popups = [];           // comic text: {text,x,y,t,life,color,size,rot}
+const bursts = [];           // spiky impact stars: {x,y,t,r}
+const addShake = a => { shakeAmt = Math.max(shakeAmt, a); };
+const addFreeze = s => { freezeT = Math.max(freezeT, s); };
+function popText(str, x, y, color = '#ffe14a', size = 22) {
+  popups.push({ text: str, x, y, t: 0, life: 0.8, color, size, rot: (Math.random() - 0.5) * 0.4 });
+}
+function addBurst(x, y, r) { bursts.push({ x, y, t: 0, r }); }
+function resetJuice() { shakeAmt = 0; freezeT = 0; flashA = 0; popups.length = 0; bursts.length = 0; }
+function updateJuice(dt) {
+  shakeAmt = Math.max(0, shakeAmt - 45 * dt);
+  flashA = Math.max(0, flashA - 3 * dt);
+  for (const arr of [popups, bursts])
+    for (let i = arr.length - 1; i >= 0; i--) { arr[i].t += dt; if (arr[i].t > (arr[i].life || 0.14)) arr.splice(i, 1); }
+}
+// Camera offset for this frame (call inside a ctx.save()).
+function applyShake() {
+  if (shakeAmt > 0.3) ctx.translate(Math.round((Math.random() - 0.5) * 2 * shakeAmt), Math.round((Math.random() - 0.5) * 2 * shakeAmt));
+}
+function drawJuice() {
+  for (const b of bursts) {                      // yellow/orange comic star, shrinking
+    const k = 1 - b.t / 0.14, r = b.r * (0.6 + 0.6 * k);
+    for (const [rr, col] of [[r, '#ff5a3c'], [r * 0.65, '#ffe14a']]) {
+      ctx.fillStyle = col; ctx.beginPath();
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2, rad = i % 2 ? rr * 0.5 : rr;
+        ctx.lineTo(Math.round(b.x + Math.cos(a) * rad), Math.round(b.y + Math.sin(a) * rad));
+      }
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  for (const p of popups) {                      // comic text: overshoot in, float up, fade out
+    const k = p.t / p.life, sc = p.t < 0.1 ? 0.4 + 9 * p.t * 1.2 : 1;
+    ctx.save(); ctx.globalAlpha = k > 0.7 ? 1 - (k - 0.7) / 0.3 : 1;
+    ctx.translate(Math.round(p.x), Math.round(p.y - k * 28)); ctx.rotate(p.rot); ctx.scale(sc, sc);
+    ctx.font = `bold ${p.size}px "Courier New", monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round'; ctx.lineWidth = 5; ctx.strokeStyle = '#000'; ctx.strokeText(p.text, 0, 0);
+    ctx.fillStyle = p.color; ctx.fillText(p.text, 0, 0);
+    ctx.restore();
+  }
+}
+function drawFlash() { if (flashA > 0) rect(0, 0, W, H, `rgba(255,255,255,${Math.min(0.8, flashA)})`); }
+
+// ---------------------------------------------------------------------
 // 6. The CYBERCHUNK: an ugly, angular steel pickup (parody of a certain famous truck).
 //    Health 0..maxHp maps to 4 damage stages:
 //      0 pristine · 1 cracked windows (first hit) · 2 dents · 3 panels fall off · 4 collapsed + smoking battery
@@ -248,6 +298,11 @@ const truck = {
   // One-off effects when a new damage stage is reached.
   onStage(st) {
     const cx = this.x, by = GROUND_Y + 14;
+    // Big moments: a heavy freeze, shake and a comic caption per damage stage
+    const caps = ['', 'SHATTERPROOF?!', 'DENTED!', 'RECALL!', 'TOTALED!'];
+    addShake([0, 6, 8, 12, 18][st]); addFreeze([0, 0.1, 0.12, 0.16, 0.3][st]);
+    popText(caps[st], cx, by - 100, st === 3 ? '#ff5a3c' : st === 4 ? '#ffe14a' : '#8fd3ff', st >= 3 ? 30 : 24);
+    if (st === 4) { flashA = 0.7; addBurst(cx, by - 40, 60); }
     if (st === 1) {           // the famous "unbreakable" window demo… breaks
       for (let i = 0; i < 14; i++)
         spawnDebris(cx - 30 + Math.random() * 90, by - 55, (Math.random() - 0.5) * 220, -Math.random() * 260, 4, 4, '#bfe9ff', 2.2);
@@ -836,12 +891,32 @@ function applyLowPoly(amount) {
 let shout = null;   // {text, color, t}
 function onSpecialStart(def) { shout = { text: def.shout, color: def.shoutColor, t: 0 }; }
 
-// Called for every landed hit; later PRs hang scoring/juice off this.
+// Called for every landed hit; all the hit feedback ("juice") hangs off this.
+//   type: 'punch' | 'kick' | 'special'; dealt: damage actually applied; (px, py): contact point.
+const HIT_WORDS = { punch: ['BONK!', 'POW!', 'THWACK!', 'BAM!'], kick: ['CRUNCH!', 'WHAM!', 'CLANG!', 'KRAK!'], special: ['KA-BOOM!', 'SMASH!', 'BOOM!'] };
+let hitCount = 0;
 function onTruckHit(type, dealt, px, py) {
-  // sparks flying from the impact point
-  const n = type === 'special' ? 14 : 6;
+  hitCount++;
+  const tiny = dealt < 0.5;                               // Hwatt's flurry: lots of small hits, so keep it light
+  // camera shake + hit-stop scale with the move's weight
+  addShake(tiny ? 1.5 : type === 'kick' ? 5 : type === 'special' ? 8 : 3);
+  if (!tiny) addFreeze(type === 'kick' ? 0.055 : type === 'special' ? 0.09 : 0.035);
+  // comic word (every hit, except only every 3rd of the tiny ones)
+  if (!tiny || hitCount % 3 === 0) {
+    const w = HIT_WORDS[type];
+    popText(w[Math.floor(Math.random() * w.length)], px + 10 + Math.random() * 30, py - 30 - Math.random() * 20,
+            type === 'kick' ? '#ff9a3c' : type === 'special' ? '#ff5ad5' : '#ffe14a', type === 'special' ? 28 : 20);
+  }
+  if (!tiny) addBurst(px, py, type === 'special' ? 34 : type === 'kick' ? 26 : 20);
+  // debris: steel chips and yellow sparks flying off the truck (more for heavier hits)
+  const n = tiny ? 3 : type === 'special' ? 16 : type === 'kick' ? 10 : 6;
+  const cols = ['#d0d5db', '#8b929a', '#aab0b8', '#ffe14a'];
   for (let i = 0; i < n; i++)
-    spawnDebris(px, py, 40 + Math.random() * 180, -Math.random() * 220, 3, 3, i % 2 ? '#ffe14a' : '#d0d5db', 0.7);
+    spawnDebris(px + Math.random() * 10, py, (Math.random() - 0.3) * 260, -80 - Math.random() * 260,
+                2 + Math.random() * 4, 2 + Math.random() * 3, cols[i % cols.length], 0.6 + Math.random() * 0.8);
+  // later damage stages: dents pop chunks off the body that stay on the floor
+  if (truck.stage >= 2 && !tiny)
+    for (let i = 0; i < 2; i++) spawnDebris(px, py - 10, (Math.random() - 0.2) * 200, -150 - Math.random() * 120, 8, 6, '#8b929a', -1);
 }
 
 // ---------------------------------------------------------------------
@@ -927,7 +1002,7 @@ states.game = {
   menu: 0,                             // results menu cursor (0 retry, 1 change fighter)
   lastBeep: 0,
   enter() {
-    truck.reset(); debris.length = 0; fighter.reset(110); fighter.look = currentChar.look; shout = null;
+    truck.reset(); debris.length = 0; fighter.reset(110); fighter.look = currentChar.look; shout = null; resetJuice();
     this.phase = 'intro'; this.pt = 0; this.timeLeft = ROUND_TIME;
     this.won = false; this.timeBonus = 0; this.total = 0; this.newBest = false; this.menu = 0;
   },
@@ -947,7 +1022,7 @@ states.game = {
     const live = this.phase === 'play';
     fighter.update(dt, live);
     if (shout && (shout.t += dt) > 1.1) shout = null;
-    truck.update(dt); updateDebris(dt);
+    truck.update(dt); updateDebris(dt); updateJuice(dt);
 
     if (this.phase === 'intro' && this.pt > 1.4) this.setPhase('play');
     else if (live) {
@@ -967,6 +1042,7 @@ states.game = {
     if (pressed.back) setState('title');
   },
   draw() {
+    ctx.save(); applyShake();                              // camera shake affects the world, not the HUD
     drawBackground();
     // salesman: smug while undamaged, sweating as the truck breaks, panicking when it's wrecked
     const mood = this.phase === 'banner' || this.phase === 'results' ? (this.won ? 2 : 0)
@@ -976,12 +1052,14 @@ states.game = {
       const line = this.won ? 'MY COMMISSION!!' : 'HA HA HA! NO SALE!';
       text(line, 560, GROUND_Y - 66, 10, this.won ? '#ff6a6a' : '#ffe14a');
     }
-    truck.draw(); fighter.draw(); drawDebris();
+    truck.draw(); fighter.draw(); drawDebris(); drawJuice();
     if (fighter.sp) {
       fighter.sp.def.fx(fighter, fighter.sp.t);
       const lp = fighter.sp.def.lowPoly ? fighter.sp.def.lowPoly(fighter.sp.t) : 0;
       if (lp > 0) applyLowPoly(lp);                       // faceted "metaverse" look, under the HUD
     }
+    ctx.restore();
+    drawFlash();
     this.drawHud();
     if (this.phase === 'intro') this.drawIntro();
     if (this.phase === 'banner') this.drawBanner();
@@ -1077,8 +1155,8 @@ function frame(now) {
   last = now;
   while (acc >= STEP) {
     bgTime += STEP;
-    state.update(STEP);
-    for (const k in pressed) delete pressed[k];   // consume one-shot presses
+    if (freezeT > 0) freezeT -= STEP;             // hit-stop: skip the simulation, keep queued key presses
+    else { state.update(STEP); for (const k in pressed) delete pressed[k]; }   // consume one-shot presses
     acc -= STEP;
   }
   ctx.clearRect(0, 0, W, H);
