@@ -358,7 +358,136 @@ function drawTruckBar() {
 }
 
 // ---------------------------------------------------------------------
-// 7. The fighter: movement, punch / kick attacks and hit detection
+// 7. Roster: six original parody caricatures.
+//    `look` colors drive the shared chibi body in fighter.draw(); `torso` / `head` hooks paint the
+//    signature details on top. Hooks run in fighter-local coords (origin = feet) and take `ob`, the
+//    current vertical bob offset (negative = up), so details move with the body.
+// ---------------------------------------------------------------------
+const fr = (x, y, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(x, y, w, h); };   // local fillRect
+
+const CHARACTERS = [
+  {
+    id: 'tromp', name: 'DONALD TROMP', special: "YOU'RE FIRED!",
+    blurb: 'Huge red tie. Golden swoop. Tremendous hands.',
+    win: 'Tremendous! Best smashing, believe me.', lose: 'Fake truck! Rigged! Sad!',
+    look: {
+      skin: '#f0a35e', hair: '#f5c542', shirt: '#1b2a55', pants: '#1b2a55', shoes: '#111',
+      torso(ob) {
+        fr(-8, -32 + ob, 5, 4, '#fff'); fr(3, -32 + ob, 5, 4, '#fff');       // collar
+        fr(-3, -32 + ob, 6, 6, '#c4121a');                                  // knot
+        fr(-5, -27 + ob, 10, 17, '#e0202a'); fr(-5, -27 + ob, 3, 17, '#ff4a50');   // way-too-long tie
+      },
+      head(ob) {
+        fr(-16, -62 + ob, 32, 6, '#f5c542');                                // golden swoop sweeping forward
+        fr(4, -67 + ob, 18, 7, '#f5c542'); fr(16, -64 + ob, 8, 4, '#f5c542');
+        fr(0, -53 + ob, 11, 2, '#b8741a');                                  // stern brow
+        fr(2, -38 + ob, 6, 3, '#b3411f');                                   // pursed lips
+      },
+    },
+  },
+  {
+    id: 'muskrat', name: 'ELON MUSKRAT', special: 'NOT-A-FLAMETHROWER',
+    blurb: 'Smug grin. Rat ears. Wrecking his own product.',
+    win: "Fine, I'll tweet it was a feature.", lose: 'Recall issued. By me. On myself.',
+    look: {
+      skin: '#f2c9a0', hair: '#3a2a1a', shirt: '#15151a', pants: '#2a3a5a', shoes: '#ddd',
+      torso(ob) {
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath();       // big white X on the tee
+        ctx.moveTo(-4, -29 + ob); ctx.lineTo(4, -19 + ob); ctx.moveTo(4, -29 + ob); ctx.lineTo(-4, -19 + ob); ctx.stroke();
+      },
+      head(ob) {
+        fr(-12, -65 + ob, 7, 6, '#8a8a92'); fr(-10, -63 + ob, 3, 3, '#e8a0a8');   // little rat ears
+        fr(4, -65 + ob, 7, 6, '#8a8a92'); fr(6, -63 + ob, 3, 3, '#e8a0a8');
+        fr(1, -54 + ob, 10, 2, '#2a1a0a');                                  // one raised brow
+        fr(-2, -41 + ob, 14, 5, '#000'); fr(-1, -40 + ob, 12, 3, '#fff');   // smug toothy smirk
+        fr(10, -42 + ob, 2, 2, '#000');
+      },
+    },
+  },
+  {
+    id: 'zuckerbot', name: 'MARK ZUCKERBOT', special: 'METAVERSE TAKEDOWN',
+    blurb: 'Grey hoodie. Robotic blink. VR on forehead.',
+    win: 'Metaverse: 1. Truck: 0.', lose: 'Error 404: biceps not found.',
+    look: {
+      skin: '#f4d9c0', hair: '#c9a46a', shirt: '#9aa0a8', pants: '#3a3d46', shoes: '#eee',
+      torso(ob) {
+        fr(-7, -22 + ob, 14, 6, '#80868e');                                 // hoodie pocket
+        fr(-4, -32 + ob, 1, 8, '#fff'); fr(3, -32 + ob, 1, 8, '#fff');      // drawstrings
+      },
+      head(ob) {
+        const blink = (bgTime % 2.4) < 0.14;                                // robotic periodic blink
+        if (blink) { fr(-9, -49 + ob, 7, 7, '#f4d9c0'); fr(2, -49 + ob, 8, 7, '#f4d9c0'); fr(-9, -46 + ob, 19, 1, '#222'); }
+        else { fr(-8, -48 + ob, 5, 5, '#7fe9ff'); fr(4, -48 + ob, 5, 5, '#7fe9ff'); }   // LED eyes
+        fr(-14, -64 + ob, 30, 9, '#202028');                                // VR headset pushed up
+        fr(-10, -63 + ob, 8, 6, '#5bd0ff'); fr(2, -63 + ob, 8, 6, '#5bd0ff');
+        fr(-16, -60 + ob, 3, 12, '#202028');                                // strap
+        fr(-1, -38 + ob, 9, 2, '#222');                                     // flat, unreadable mouth
+      },
+    },
+  },
+  {
+    id: 'hassabyte', name: 'DEMIS HASSABYTE', special: 'ALPHASTRIKE',
+    blurb: 'Calm scientist. Calculates everything. Twice.',
+    win: 'Probability of victory: 100%.', lose: 'Calculation error. Reticulating arms...',
+    look: {
+      skin: '#e8bd94', hair: '#4a4a52', shirt: '#f2f2f2', pants: '#3a3a45', shoes: '#333',
+      torso(ob) {
+        fr(-3, -32 + ob, 6, 18, '#3b6db3');                                 // blue shirt under open lab coat
+        fr(-4, -32 + ob, 1, 18, '#c8c8c8'); fr(3, -32 + ob, 1, 18, '#c8c8c8');
+        fr(5, -26 + ob, 2, 5, '#e33'); fr(7, -26 + ob, 2, 5, '#33e');       // pocket pens
+      },
+      head(ob) {
+        ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1.5;                  // round glasses
+        ctx.strokeRect(-10, -50 + ob, 9, 9); ctx.strokeRect(1, -50 + ob, 10, 9);
+        fr(-1, -47 + ob, 2, 1, '#1a1a1a');
+        fr(-2, -38 + ob, 9, 1, '#6b3a2a'); fr(-3, -39 + ob, 1, 1, '#6b3a2a'); fr(7, -39 + ob, 1, 1, '#6b3a2a');   // calm smile
+        fr(-8, -62 + ob, 5, 3, '#4a4a52'); fr(2, -62 + ob, 6, 3, '#4a4a52');                                      // tousled sci-hair
+      },
+    },
+  },
+  {
+    id: 'hwatt', name: 'JENSEN HWATT', special: 'GPU OVERCLOCK',
+    blurb: 'Iconic leather jacket. The more you smash, the more you save.',
+    win: 'The more you smash, the more you save!', lose: 'Out of stock. Try again next quarter.',
+    look: {
+      skin: '#f0c7a0', hair: '#26262a', shirt: '#17171b', pants: '#17171b', shoes: '#555',
+      torso(ob) {
+        fr(-7, -30 + ob, 3, 10, '#3a3a46'); fr(4, -30 + ob, 2, 6, '#3a3a46');   // leather sheen
+        fr(0, -32 + ob, 2, 18, '#aaa');                                      // zipper
+        fr(-9, -32 + ob, 6, 4, '#2c2c36'); fr(3, -32 + ob, 6, 4, '#2c2c36'); // collar flaps
+        fr(-6, -24 + ob, 4, 4, '#76d12a');                                   // green chip pin
+      },
+      head(ob) {
+        fr(0, -62 + ob, 12, 2, '#aaa');                                      // silver streak in slick hair
+        fr(-2, -41 + ob, 11, 4, '#000'); fr(-1, -40 + ob, 9, 2, '#fff');     // big salesman grin
+      },
+    },
+  },
+  {
+    id: 'oldman', name: 'SAM OLDMAN', special: 'AGI BEAM',
+    blurb: 'Earnest eyes. Chat-bubble hoodie. Asks nicely.',
+    win: 'AGI achieved. Truck-hood ended.', lose: "Sorry, I can't help with that request.",
+    look: {
+      skin: '#f4cfae', hair: '#6b4a2e', shirt: '#9ab7d6', pants: '#4a5266', shoes: '#fff',
+      torso(ob) {
+        fr(-6, -29 + ob, 12, 8, '#fff'); fr(-5, -21 + ob, 3, 3, '#fff');    // chat bubble emblem
+        fr(-4, -26 + ob, 2, 2, '#7b61ff'); fr(-1, -26 + ob, 2, 2, '#7b61ff'); fr(2, -26 + ob, 2, 2, '#7b61ff');
+      },
+      head(ob) {
+        fr(-12, -66 + ob, 5, 5, '#6b4a2e'); fr(3, -66 + ob, 6, 5, '#6b4a2e');   // tousled tufts
+        fr(1, -50 + ob, 11, 10, '#fff'); fr(7, -48 + ob, 4, 6, '#000');          // wide, earnest eyes
+        fr(2, -38 + ob, 5, 3, '#a0522d');                                        // polite little "o"
+      },
+    },
+  },
+];
+
+// Currently chosen fighter (set on the select screen).
+let currentChar = CHARACTERS[0];
+let selectIndex = 0;
+
+// ---------------------------------------------------------------------
+// 8. The fighter: movement, punch / kick attacks and hit detection
 // ---------------------------------------------------------------------
 // Tunable combat numbers. Damage is in "truck health units" (truck has 100).
 const MOVES = {
@@ -370,12 +499,10 @@ const SCORE_PER_DAMAGE = 100;      // points = damage dealt * 100
 const MOVE_SPEED = 130;            // px / second
 const BUFFER_TIME = 0.12;          // an attack pressed this early before recovery ends still fires
 
-// Default look; the character-select PR replaces this with six caricatures.
-const DEFAULT_LOOK = { skin: '#f2c9a0', hair: '#5a3a1a', shirt: '#2f6fd1', pants: '#2a2f4a', shoes: '#e8e8e8', head: null };
 
 const fighter = {
   x: 120, facing: 1,                 // always faces the truck (right)
-  look: DEFAULT_LOOK,
+  look: CHARACTERS[0].look,
   walkT: 0, moving: false,
   attack: null,                      // {type, t, hitDone} while attacking
   buffered: null, bufferT: 0,
@@ -434,18 +561,23 @@ const fighter = {
     return Math.max(0, 1 - (a.t - m.startup - m.active) / m.recover);
   },
   // Chibi body: big head, small torso, stubby limbs. Origin = feet center.
-  draw() {
-    const L = this.look, ext = this.extension();
-    const kicking = this.attack && this.attack.type === 'kick';
-    const punching = this.attack && this.attack.type === 'punch';
-    const bob = this.moving ? Math.abs(Math.sin(this.walkT)) * 2 : Math.sin(truck.t * 4) * 0.8;
-    const hop = this.celebrate ? Math.abs(Math.sin(truck.t * 8)) * 10 : 0;   // victory hop
+  // `o` lets the select screen draw idle previews: {x, y, scale, look, celebrate}.
+  draw(o = {}) {
+    const preview = 'look' in o;
+    const L = o.look || this.look, ext = preview ? 0 : this.extension();
+    const kicking = !preview && this.attack && this.attack.type === 'kick';
+    const punching = !preview && this.attack && this.attack.type === 'punch';
+    const moving = !preview && this.moving;
+    const celebrate = preview ? !!o.celebrate : this.celebrate;
+    const bob = moving ? Math.abs(Math.sin(this.walkT)) * 2 : Math.sin(bgTime * 4) * 0.8;
+    const hop = celebrate ? Math.abs(Math.sin(bgTime * 8)) * 10 : 0;   // victory hop
     ctx.save();
-    ctx.translate(Math.round(this.x), GROUND_Y + 14);
+    ctx.translate(Math.round(o.x ?? this.x), o.y ?? GROUND_Y + 14);
+    if (o.scale) ctx.scale(o.scale, o.scale);
     // ground shadow
     ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(-16, -2, 32, 4);
     ctx.translate(0, -hop);
-    const sw = this.moving ? Math.sin(this.walkT) * 5 : 0;      // leg swing while walking
+    const sw = moving ? Math.sin(this.walkT) * 5 : 0;      // leg swing while walking
     // --- back leg & front leg (kick uses the front leg) ---
     ctx.lineWidth = 6; ctx.lineCap = 'butt';
     ctx.strokeStyle = L.pants;
@@ -462,7 +594,7 @@ const fighter = {
     // --- torso ---
     ctx.fillStyle = L.shirt; ctx.fillRect(-9, -32 - bob, 18, 18);
     ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.fillRect(-9, -18 - bob, 18, 4);
-    if (L.torso) L.torso(ctx, -bob, this);       // character-specific details (tie, jacket…)
+    if (L.torso) L.torso(-bob);       // character-specific details (tie, jacket…)
     // --- back arm (swings opposite to legs) ---
     ctx.strokeStyle = L.shirt; ctx.lineWidth = 5;
     ctx.beginPath(); ctx.moveTo(-8, -29 - bob); ctx.lineTo(-10 + sw * 0.6, -17 - bob); ctx.stroke();
@@ -474,19 +606,19 @@ const fighter = {
     ctx.fillStyle = '#fff'; ctx.fillRect(2, -49 - bob, 8, 7); ctx.fillRect(-9, -49 - bob, 7, 7);
     ctx.fillStyle = '#000'; ctx.fillRect(6, -47 - bob, 4, 4); ctx.fillRect(-5, -47 - bob, 4, 4);
     ctx.fillRect(-3, -38 - bob, 10, 2);                          // mouth
-    if (this.attack) ctx.fillRect(-4, -39 - bob, 12, 4);          // yelling
-    if (L.head) L.head(ctx, -bob, this);        // character-specific hair/accessories
+    if (!preview && this.attack) ctx.fillRect(-4, -39 - bob, 12, 4);          // yelling
+    if (L.head) L.head(-bob);        // character-specific hair/accessories
     // --- front arm: the punching arm extends toward the truck ---
     ctx.strokeStyle = L.shirt; ctx.lineWidth = 5;
     const fx = punching ? 10 + ext * (MOVES.punch.reach - 10) : 12;
     const fy = punching ? -27 - bob : -18 - bob;
     ctx.beginPath(); ctx.moveTo(8, -29 - bob); ctx.lineTo(fx, fy); ctx.stroke();
     ctx.fillStyle = L.skin; ctx.fillRect(fx - 2, fy - 4, 8, 8);   // fist
-    if (this.celebrate) {                                          // both arms up in triumph
+    if (celebrate) {                                          // both arms up in triumph
       ctx.strokeStyle = L.shirt; ctx.lineWidth = 5;
       for (const sx of [-8, 8]) {
-        ctx.beginPath(); ctx.moveTo(sx, -29 - bob); ctx.lineTo(sx * 1.6, -52 - bob); ctx.stroke();
-        ctx.fillStyle = L.skin; ctx.fillRect(sx * 1.6 - 3, -56 - bob, 7, 7);
+        ctx.beginPath(); ctx.moveTo(sx, -29 - bob); ctx.lineTo(sx * 2.5, -50 - bob); ctx.stroke();
+        ctx.fillStyle = L.skin; ctx.fillRect(sx * 2.5 - 3, -54 - bob, 7, 7);
       }
     }
     ctx.restore();
@@ -501,7 +633,7 @@ function onTruckHit(type, dealt, px, py) {
 }
 
 // ---------------------------------------------------------------------
-// 8. Game state machine
+// 9. Game state machine
 //    Each state is {enter(), update(dt), draw()}. PRs 2+ add more states.
 // ---------------------------------------------------------------------
 const states = {};
@@ -517,7 +649,7 @@ states.title = {
   enter() { this.t = 0; },
   update(dt) {
     this.t += dt;
-    if (pressed.confirm) setState('game');
+    if (pressed.confirm) setState('select');
   },
   draw() {
     drawBackground();
@@ -532,8 +664,43 @@ states.title = {
 };
 
 
-// The default fighter's lines; the character-select PR supplies six real fighters.
-let currentChar = { name: 'ROOKIE', win: "Cash me outside the dealership!", lose: "My arms... are noodles." };
+// Character select: a row of six portraits, info panel for the highlighted fighter.
+states.select = {
+  t: 0,
+  enter() { this.t = 0; },
+  update(dt) {
+    this.t += dt;
+    if (pressed.left) selectIndex = (selectIndex + CHARACTERS.length - 1) % CHARACTERS.length;
+    if (pressed.right) selectIndex = (selectIndex + 1) % CHARACTERS.length;
+    if (pressed.confirm) { currentChar = CHARACTERS[selectIndex]; setState('game'); }
+    if (pressed.back) setState('title');
+  },
+  draw() {
+    // dark arcade backdrop with scrolling stripes
+    rect(0, 0, W, H, '#14142b');
+    for (let i = 0; i < 12; i++) rect(((i * 70 + this.t * 30) % (W + 70)) - 70, 0, 18, H, 'rgba(255,255,255,.03)');
+    text('CHOOSE YOUR FIGHTER', W / 2, 26, 22, '#ffe14a', 'center', '#7a1d1d');
+    const cw = 94, gap = 6, x0 = (W - (CHARACTERS.length * cw + (CHARACTERS.length - 1) * gap)) / 2;
+    CHARACTERS.forEach((ch, i) => {
+      const x = x0 + i * (cw + gap), y = 52, h = 138, sel = i === selectIndex;
+      // card
+      rect(x - 3, y - 3, cw + 6, h + 6, sel ? (Math.floor(this.t * 6) % 2 ? '#ffe14a' : '#ff5a3c') : '#333');
+      rect(x, y, cw, h, sel ? '#2b2b55' : '#1b1b38');
+      // portrait: scaled-up idle preview (the selected fighter celebrates)
+      fighter.draw({ x: x + cw / 2, y: y + h - 10, scale: sel ? 1.6 : 1.4, look: ch.look, celebrate: sel });
+      text(String(i + 1), x + 8, y + 10, 10, '#888', 'left', null);
+    });
+    // info panel
+    const ch = CHARACTERS[selectIndex], py = 208;
+    rect(60, py - 3, 520, 106, '#fff'); rect(63, py, 514, 100, '#14142b');
+    text(ch.name, W / 2, py + 20, 20, '#fff');
+    text(ch.blurb, W / 2, py + 44, 11, '#bbb', 'center', null);
+    text('SPECIAL (L):', W / 2 - 80, py + 68, 12, '#8fd3ff', 'center', null);
+    text(ch.special, W / 2 + 40, py + 68, 12, '#ff9ad5', 'center', null);
+    text('"' + ch.win + '"', W / 2, py + 88, 10, '#8f8', 'center', null);
+    text('< > CHOOSE      SPACE / ENTER: FIGHT!      ESC: BACK', W / 2, H - 22, 11, '#fff');
+  },
+};
 
 // Session-wide best score (kept in memory only, resets on page reload).
 let bestScore = 0;
@@ -548,7 +715,7 @@ states.game = {
   menu: 0,                             // results menu cursor (0 retry, 1 change fighter)
   lastBeep: 0,
   enter() {
-    truck.reset(); debris.length = 0; fighter.reset(110);
+    truck.reset(); debris.length = 0; fighter.reset(110); fighter.look = currentChar.look;
     this.phase = 'intro'; this.pt = 0; this.timeLeft = ROUND_TIME;
     this.won = false; this.timeBonus = 0; this.total = 0; this.newBest = false; this.menu = 0;
   },
@@ -581,7 +748,7 @@ states.game = {
       if (pressed.left || pressed.right || pressed.up || pressed.down) this.menu = 1 - this.menu;
       if (pressed.confirm) {
         if (this.menu === 0) setState('game');        // retry
-        else setState('title');                       // (becomes "change fighter" once select exists)
+        else setState('select');
       }
     }
     if (pressed.back) setState('title');
@@ -605,6 +772,7 @@ states.game = {
   drawHud() {
     drawTruckBar();
     text('SCORE ' + String(fighter.score).padStart(6, '0'), W - 16, 20, 14, '#fff', 'right');
+    text(currentChar.name, W - 16, 38, 9, '#8fd3ff', 'right');
     // big centered countdown; flashes red in the final 5 seconds
     const secs = Math.ceil(this.timeLeft), low = this.timeLeft <= 5 && this.phase === 'play';
     const pulse = low ? 1 + 0.15 * Math.abs(Math.sin(this.timeLeft * Math.PI * 2)) : 1;
@@ -663,7 +831,7 @@ states.game = {
 };
 
 // ---------------------------------------------------------------------
-// 9. Main loop: fixed 60 Hz update, render every animation frame
+// 10. Main loop: fixed 60 Hz update, render every animation frame
 // ---------------------------------------------------------------------
 const STEP = 1 / 60;
 let last = performance.now(), acc = 0;
