@@ -216,11 +216,12 @@ function drawDebris() {
 const truck = {
   x: 420, maxHp: 100, hp: 100,
   stage: 0, wobble: 0, collapse: 0,   // collapse animates 0→1 when destroyed
+  tilt: 0,                             // radians; >0 lifts the nose (used by the jiu-jitsu slam)
   dents: [], smoke: [], t: 0,
   halfW: 110,                          // half width, used for hit range checks
   reset() {
     this.hp = this.maxHp; this.stage = 0; this.wobble = 0; this.collapse = 0;
-    this.dents.length = 0; this.smoke.length = 0; this.t = 0;
+    this.dents.length = 0; this.smoke.length = 0; this.t = 0; this.tilt = 0;
   },
   get destroyed() { return this.hp <= 0; },
   // Which stage a given hp fraction corresponds to.
@@ -277,6 +278,7 @@ const truck = {
     const shake = this.wobble * Math.sin(this.t * 60) * 3;
     ctx.save();
     ctx.translate(Math.round(this.x + shake), GROUND_Y + 14);
+    if (this.tilt) { ctx.translate(100, 0); ctx.rotate(this.tilt); ctx.translate(-100, 0); }   // pivot on the rear wheels
     if (st === 4) ctx.scale(1, 1 - 0.62 * c);      // squash into a pile
     // --- wheels (behind body) ---
     const flat = st === 4 ? c : 0;
@@ -507,9 +509,11 @@ const fighter = {
   attack: null,                      // {type, t, hitDone} while attacking
   buffered: null, bufferT: 0,
   hits: 0, score: 0, celebrate: false,
+  sp: null, cooldown: 0, tooFar: 0,   // active special {def,t,hitIdx,id}; cooldown seconds left; 'too far' message timer
   reset(x) {
     this.x = x; this.walkT = 0; this.moving = false; this.attack = null;
     this.buffered = null; this.bufferT = 0; this.hits = 0; this.score = 0; this.celebrate = false;
+    this.sp = null; this.cooldown = 0; this.tooFar = 0;
   },
   // Distance (px) from the fighter to the truck's nose; the hit range check uses this.
   distToTruck() { return (truck.x - truck.halfW) - this.x; },
@@ -524,6 +528,20 @@ const fighter = {
       if (pressed.kick)  { this.buffered = 'kick';  this.bufferT = BUFFER_TIME; }
     }
     this.bufferT -= dt; if (this.bufferT <= 0) this.buffered = null;
+    this.tooFar = Math.max(0, this.tooFar - dt);
+
+    // --- special move (L): needs a ready meter, a free fighter, and (for melee specials) being close enough ---
+    if (canAct && pressed.special && !this.attack && !this.sp && this.cooldown <= 0) {
+      const def = SPECIALS[currentChar.id];
+      if (this.distToTruck() <= def.reach) { this.sp = { def, t: 0, hitIdx: 0 }; this.slideFrom = this.x; this.buffered = null; onSpecialStart(def); }
+      else this.tooFar = 0.8;
+    }
+    if (this.sp) {
+      const sp = this.sp; sp.t += dt;
+      if (sp.def.update) sp.def.update(this, sp.t);
+      while (sp.hitIdx < sp.def.hits.length && sp.t >= sp.def.hits[sp.hitIdx].t) this.specialHit(sp.def.hits[sp.hitIdx++].dmg);
+      if (sp.t >= sp.def.dur) { this.sp = null; this.cooldown = SPECIAL_COOLDOWN; truck.tilt = 0; }
+    } else this.cooldown = Math.max(0, this.cooldown - dt);
 
     if (this.attack) {
       const a = this.attack, m = MOVES[a.type];
@@ -532,11 +550,11 @@ const fighter = {
       if (!a.hitDone && a.t >= m.startup) { a.hitDone = true; this.resolveHit(a.type); }
       if (a.t >= this.attackLen(a)) this.attack = null;
     }
-    if (!this.attack && this.buffered && canAct) { this.startAttack(this.buffered); this.buffered = null; }
+    if (!this.attack && !this.sp && this.buffered && canAct) { this.startAttack(this.buffered); this.buffered = null; }
 
     // --- walking (not while swinging; keeps attacks committal) ---
     this.moving = false;
-    if (!this.attack && canAct) {
+    if (!this.attack && !this.sp && canAct) {
       const dir = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
       if (dir) { this.x += dir * MOVE_SPEED * dt; this.moving = true; this.walkT += dt * 12; }
     }
@@ -551,6 +569,13 @@ const fighter = {
     this.hits++; this.score += Math.round(dealt * SCORE_PER_DAMAGE);
     onTruckHit(type, dealt, this.x + this.facing * m.reach, GROUND_Y - 26);
     return true;
+  },
+  // Damage event from a special move (always lands; the reach check happened when it started).
+  specialHit(dmg) {
+    if (truck.destroyed) return;
+    const dealt = truck.hit(dmg);
+    this.hits++; this.score += Math.round(dealt * SCORE_PER_DAMAGE);
+    onTruckHit('special', dealt, noseX() + 24, GROUND_Y - 26);
   },
   // Normalized 0..1 extension of the limb: ramps up during startup, held while active, eases back in recovery.
   extension() {
@@ -568,6 +593,7 @@ const fighter = {
     const kicking = !preview && this.attack && this.attack.type === 'kick';
     const punching = !preview && this.attack && this.attack.type === 'punch';
     const moving = !preview && this.moving;
+    const sp = !preview && this.sp;
     const celebrate = preview ? !!o.celebrate : this.celebrate;
     const bob = moving ? Math.abs(Math.sin(this.walkT)) * 2 : Math.sin(bgTime * 4) * 0.8;
     const hop = celebrate ? Math.abs(Math.sin(bgTime * 8)) * 10 : 0;   // victory hop
@@ -612,8 +638,11 @@ const fighter = {
     ctx.strokeStyle = L.shirt; ctx.lineWidth = 5;
     const fx = punching ? 10 + ext * (MOVES.punch.reach - 10) : 12;
     const fy = punching ? -27 - bob : -18 - bob;
-    ctx.beginPath(); ctx.moveTo(8, -29 - bob); ctx.lineTo(fx, fy); ctx.stroke();
-    ctx.fillStyle = L.skin; ctx.fillRect(fx - 2, fy - 4, 8, 8);   // fist
+    if (sp) sp.def.arms(this, sp.t, bob, L);                       // special moves pose their own arms
+    else {
+      ctx.beginPath(); ctx.moveTo(8, -29 - bob); ctx.lineTo(fx, fy); ctx.stroke();
+      ctx.fillStyle = L.skin; ctx.fillRect(fx - 2, fy - 4, 8, 8);   // fist
+    }
     if (celebrate) {                                          // both arms up in triumph
       ctx.strokeStyle = L.shirt; ctx.lineWidth = 5;
       for (const sx of [-8, 8]) {
@@ -625,10 +654,193 @@ const fighter = {
   },
 };
 
+// ---------------------------------------------------------------------
+// 8b. Special moves. One scripted move per fighter, worth 3x a punch (3 damage), used with L.
+//     A move is a timeline over `dur` seconds:
+//       reach   max distance (px) from the truck nose at which it can be triggered (Infinity = anywhere)
+//       hits    [{t, dmg}] damage events, fired once when the timeline passes `t`
+//       update  per-frame side effects (sliding the fighter, tilting the truck…)
+//       arms    draws the fighter's arms in local coords (replaces the normal front arm)
+//       fx      draws world-space effects on top of the scene
+//       lowPoly optional: returns 0..1 intensity of the low-poly screen filter
+//     The cooldown (3 s, shown as a meter) starts when the animation ends.
+// ---------------------------------------------------------------------
+const SPECIAL_COOLDOWN = 3;
+const lerp = (a, b, k) => a + (b - a) * Math.max(0, Math.min(1, k));
+// Chunky limb + hand helpers used by the arm poses (fighter-local coords).
+function limb(x0, y0, x1, y1, L, w = 5) {
+  ctx.strokeStyle = L.shirt; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  ctx.fillStyle = L.skin; ctx.fillRect(x1 - 3, y1 - 3, 7, 7);
+}
+function glowFist(x, y, r) {
+  ctx.fillStyle = 'rgba(80,255,80,.35)'; ctx.beginPath(); ctx.arc(x, y, r + 3, 0, 7); ctx.fill();
+  ctx.fillStyle = '#7dff5a'; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+}
+// Screen-space anchor of the truck's nose and the fighter's hand, used by several effects.
+const noseX = () => truck.x - truck.halfW;
+const handY = () => GROUND_Y + 14 - 28;
+
+const SPECIALS = {
+  // --- YOU'RE FIRED!: a giant rubber stamp drops on the truck and leaves a red FIRED imprint ---
+  tromp: {
+    dur: 0.95, reach: Infinity, hits: [{ t: 0.5, dmg: 3 }], shout: "YOU'RE FIRED!", shoutColor: '#ff4a3c',
+    arms(f, t, bob, L) {
+      if (t < 0.55) { limb(-8, -29 - bob, -16, -56 - bob, L); limb(8, -29 - bob, 16, -56 - bob, L); }   // hands up, summoning
+      else limb(8, -29 - bob, 38, -33 - bob, L);                                                        // pointing: "you're fired"
+    },
+    fx(f, t) {
+      const topY = 110, hitY = GROUND_Y + 14 - 76;              // stamp base bottom: hovering → roof of the truck
+      let y = t < 0.35 ? topY : t < 0.5 ? lerp(topY, hitY, (t - 0.35) / 0.15) : t < 0.8 ? hitY : lerp(hitY, topY, (t - 0.8) / 0.15);
+      const x = truck.x - 5;
+      rect(x - 6, y - 110, 12, 90, '#6b6b72');                  // rod
+      rect(x - 16, y - 126, 32, 18, '#7a4a1e'); rect(x - 16, y - 126, 32, 4, '#a8742f');   // wooden knob
+      rect(x - 40, y - 24, 80, 10, '#7a1d1d');                  // plate
+      rect(x - 38, y - 14, 76, 14, '#1a1a1a');                  // rubber base
+      if (t > 0.5) {                                            // the imprint, fading slowly
+        ctx.save(); ctx.translate(truck.x - 10, GROUND_Y - 6); ctx.rotate(-0.12);
+        ctx.globalAlpha = Math.max(0, 1 - (t - 0.5) / 0.9);
+        ctx.strokeStyle = '#d92020'; ctx.lineWidth = 3; ctx.strokeRect(-48, -16, 96, 32);
+        text('FIRED', 0, 1, 26, '#d92020', 'center', null);
+        ctx.restore();
+      }
+    },
+  },
+  // --- Not-A-Flamethrower: a roaring flame burst. He's destroying his own product. ---
+  muskrat: {
+    dur: 0.9, reach: 150, hits: [{ t: 0.35, dmg: 1 }, { t: 0.5, dmg: 1 }, { t: 0.65, dmg: 1 }], shout: 'NOT-A-FLAMETHROWER', shoutColor: '#ffb020',
+    arms(f, t, bob, L) {
+      limb(8, -29 - bob, 30, -28 - bob, L);
+      rect(24, -34 - bob, 22, 8, '#222'); rect(44, -33 - bob, 6, 6, '#ff7a1a');   // the "boring" device
+    },
+    fx(f, t) {
+      if (t < 0.2 || t > 0.8) return;
+      const x0 = f.x + 52, y0 = handY(), x1 = Math.max(x0 + 30, noseX() + 30);
+      for (let i = 0; i < 34; i++) {                             // flame particles flowing along a widening cone
+        const p = ((i / 34) + t * 3.2) % 1, spread = 2 + p * 16;
+        const x = x0 + (x1 - x0) * p, y = y0 + Math.sin(i * 12.9 + t * 45) * spread - p * 4;
+        const sz = 4 + p * 9 * (0.7 + 0.3 * Math.sin(i * 7 + t * 30));
+        ctx.fillStyle = p < 0.35 ? '#fff3a0' : p < 0.7 ? '#ff9a1a' : '#e5381b';
+        ctx.fillRect(Math.round(x - sz / 2), Math.round(y - sz / 2), Math.round(sz), Math.round(sz));
+      }
+      ctx.fillStyle = 'rgba(255,120,30,.35)'; ctx.beginPath(); ctx.arc(noseX() + 30, y0, 22 + Math.sin(t * 50) * 3, 0, 7); ctx.fill();   // glow at impact
+    },
+  },
+  // --- Metaverse Takedown: lunge, lift, slam; the screen goes low-poly ---
+  zuckerbot: {
+    dur: 1.0, reach: 70, hits: [{ t: 0.45, dmg: 3 }], shout: 'METAVERSE TAKEDOWN', shoutColor: '#5bd0ff',
+    update(f, t) {
+      f.x = lerp(f.slideFrom, noseX() - 6, t / 0.15);              // dash up to the truck
+      truck.tilt = t < 0.15 ? 0 : t < 0.4 ? lerp(0, 0.2, (t - 0.15) / 0.25) : t < 0.45 ? lerp(0.2, 0, (t - 0.4) / 0.05) : 0;   // lift… SLAM
+    },
+    arms(f, t, bob, L) { limb(8, -29 - bob, 28, -26 - bob, L); limb(-8, -29 - bob, 24, -20 - bob, L); },
+    lowPoly(t) { return t < 0.1 || t > 0.95 ? 0 : Math.min(1, (t - 0.1) / 0.1, (0.95 - t) / 0.1); },
+    fx() {},
+  },
+  // --- AlphaStrike: stop, calculate (percentage overlay), then a perfectly aimed hit ---
+  hassabyte: {
+    dur: 1.3, reach: Infinity, hits: [{ t: 1.05, dmg: 3 }], shout: 'ALPHASTRIKE', shoutColor: '#4dffa0',
+    arms(f, t, bob, L) {
+      if (t < 1.05) limb(8, -29 - bob, 5, -36 - bob, L);           // thoughtful hand on chin
+      else limb(8, -29 - bob, 36, -35 - bob, L);                   // precise point
+    },
+    fx(f, t) {
+      const x = truck.x - 118, y = GROUND_Y + 14 - 86, w = 236, h = 90, g = '#4dffa0';
+      const pct = t >= 1.0 ? 100 : Math.min(99, Math.floor((t - 0.05) / 0.95 * 100 + Math.random() * 3));
+      ctx.save(); ctx.globalAlpha = t > 1.15 ? Math.max(0, 1 - (t - 1.15) / 0.15) : 1;
+      for (const [cx, cy, dx, dy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
+        rect(cx, cy, dx * 14, 2 * dy || 2, g); rect(cx, cy, 2, dy * 14, g);     // targeting brackets
+        // (rect with negative sizes still draws correctly in canvas)
+      }
+      if (t < 1.0) {
+        const sx = x + ((t - 0.05) / 0.95) * w; rect(sx, y, 2, h, 'rgba(77,255,160,.7)');   // scan line
+        for (let i = 0; i < 6; i++) rect(x + 6 + i * 40, y + 20 + Math.sin(t * 20 + i) * 18, 3, 3, g);   // number crunching dots
+      } else {
+        const cx = noseX() + 30, cy = GROUND_Y - 10;               // locked crosshair
+        ctx.strokeStyle = '#ff3b3b'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, 14, 0, 7);
+        ctx.moveTo(cx - 22, cy); ctx.lineTo(cx + 22, cy); ctx.moveTo(cx, cy - 22); ctx.lineTo(cx, cy + 22); ctx.stroke();
+      }
+      text(t < 1.0 ? `CALCULATING... ${pct}%` : 'SOLVED  100%', x + w / 2, y - 10, 13, t < 1.0 ? g : '#ff6a6a');
+      ctx.restore();
+    },
+  },
+  // --- GPU Overclock: glowing green fists, a blur of rapid punches ---
+  hwatt: {
+    dur: 0.85, reach: 70, shout: 'GPU OVERCLOCK', shoutColor: '#7dff5a',
+    hits: Array.from({ length: 12 }, (_, i) => ({ t: 0.1 + i * 0.055, dmg: 0.25 })),
+    update(f, t) { f.x = lerp(f.slideFrom, Math.min(f.slideFrom + 12, noseX() - 10), t / 0.1); },
+    arms(f, t, bob, L) {
+      const k = Math.floor((t - 0.1) / 0.055), live = t >= 0.1 && t < 0.78;
+      const a = live && k % 2 === 0, b = live && k % 2 === 1;      // alternate fists
+      const ax = a ? 34 : 12, ay = a ? -30 : -18, bx = b ? 32 : 4, by = b ? -26 : -16;
+      limb(-8, -29 - bob, bx, by - bob, L); limb(8, -29 - bob, ax, ay - bob, L);
+      glowFist(ax + 1, ay - bob, 6); glowFist(bx + 1, by - bob, 6);
+    },
+    fx(f, t) {
+      ctx.fillStyle = `rgba(80,255,80,${0.18 + 0.1 * Math.sin(t * 40)})`;
+      ctx.beginPath(); ctx.arc(f.x, GROUND_Y - 14, 34, 0, 7); ctx.fill();    // overclocked aura
+      for (let i = 0; i < 6; i++) rect(f.x + 26 + i * 6, GROUND_Y - 26 + ((i * 7 + t * 90) % 20), 14, 2, 'rgba(125,255,90,.6)');  // speed lines
+    },
+  },
+  // --- AGI Beam: a chat-bubble laser that types out BOOM ---
+  oldman: {
+    dur: 1.0, reach: Infinity, hits: [{ t: 0.7, dmg: 3 }], shout: 'AGI BEAM', shoutColor: '#b9a6ff',
+    arms(f, t, bob, L) { limb(8, -29 - bob, 32, -30 - bob, L); },
+    fx(f, t) {
+      const x0 = f.x + 36, y0 = handY() - 2;
+      if (t > 0.1 && t < 0.7) {
+        const p = (t - 0.1) / 0.6, bx = lerp(x0 + 20, noseX() + 20, p);
+        ctx.strokeStyle = 'rgba(130,100,255,.8)'; ctx.lineWidth = 3;           // laser line behind the bubble
+        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(bx, y0); ctx.stroke();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(bx, y0); ctx.stroke();
+        const word = 'BOOM'.slice(0, Math.max(1, Math.floor((t - 0.1) / 0.12)));   // typing animation
+        rect(bx - 6, y0 - 14, 66, 26, '#14142b'); rect(bx - 4, y0 - 12, 62, 22, '#fff');   // chat bubble
+        rect(bx - 2, y0 + 10, 6, 6, '#fff');                                   // tail
+        text(word + (Math.floor(t * 12) % 2 ? '|' : ''), bx + 27, y0 - 1, 15, '#4b2fd1', 'center', null);
+      } else if (t >= 0.7) {                                                   // impact: giant BOOM
+        const k = 1 + (t - 0.7) * 3;
+        ctx.save(); ctx.globalAlpha = Math.max(0, 1 - (t - 0.7) / 0.3); ctx.translate(noseX() + 60, GROUND_Y - 40); ctx.scale(k, k);
+        text('BOOM', 0, 0, 34, '#ffe14a', 'center', '#4b2fd1'); ctx.restore();
+      }
+    },
+  },
+};
+
+// Low-poly screen filter used by Metaverse Takedown: downsample the frame to an 80x45 grid, then redraw
+// every cell as two flat-shaded triangles (diagonal alternates per cell) so the scene looks faceted.
+const LP_W = 80, LP_H = 45, LP_CELL = W / LP_W;
+const lpCanvas = document.createElement('canvas'); lpCanvas.width = LP_W; lpCanvas.height = LP_H;
+const lpCtx = lpCanvas.getContext('2d', { willReadFrequently: true });
+function applyLowPoly(amount) {
+  lpCtx.drawImage(canvas, 0, 0, LP_W, LP_H);
+  const d = lpCtx.getImageData(0, 0, LP_W, LP_H).data;
+  const px = (i, j) => { i = Math.min(LP_W - 1, i); j = Math.min(LP_H - 1, j); const o = (j * LP_W + i) * 4; return [d[o], d[o + 1], d[o + 2]]; };
+  ctx.save(); ctx.globalAlpha = amount;
+  for (let j = 0; j < LP_H; j++) for (let i = 0; i < LP_W; i++) {
+    const x = i * LP_CELL, y = j * LP_CELL, c = LP_CELL, flip = (i + j) % 2;
+    const a = px(i, j), b = px(i + 1, j + 1), sh = ((i * 7 + j * 13) % 5 - 2) * 3;   // slight facet shimmer
+    ctx.fillStyle = `rgb(${a[0] + sh},${a[1] + sh},${a[2] + sh})`;
+    ctx.beginPath();
+    if (flip) { ctx.moveTo(x, y); ctx.lineTo(x + c, y); ctx.lineTo(x, y + c); }
+    else { ctx.moveTo(x, y); ctx.lineTo(x + c, y); ctx.lineTo(x + c, y + c); }
+    ctx.fill();
+    ctx.fillStyle = `rgb(${b[0] - sh},${b[1] - sh},${b[2] - sh})`;
+    ctx.beginPath();
+    if (flip) { ctx.moveTo(x + c, y); ctx.lineTo(x + c, y + c); ctx.lineTo(x, y + c); }
+    else { ctx.moveTo(x, y); ctx.lineTo(x, y + c); ctx.lineTo(x + c, y + c); }
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Shout banner shown above the fighter when a special starts (see drawShout in the HUD code).
+let shout = null;   // {text, color, t}
+function onSpecialStart(def) { shout = { text: def.shout, color: def.shoutColor, t: 0 }; }
+
 // Called for every landed hit; later PRs hang scoring/juice off this.
 function onTruckHit(type, dealt, px, py) {
   // sparks flying from the impact point
-  for (let i = 0; i < 6; i++)
+  const n = type === 'special' ? 14 : 6;
+  for (let i = 0; i < n; i++)
     spawnDebris(px, py, 40 + Math.random() * 180, -Math.random() * 220, 3, 3, i % 2 ? '#ffe14a' : '#d0d5db', 0.7);
 }
 
@@ -715,7 +927,7 @@ states.game = {
   menu: 0,                             // results menu cursor (0 retry, 1 change fighter)
   lastBeep: 0,
   enter() {
-    truck.reset(); debris.length = 0; fighter.reset(110); fighter.look = currentChar.look;
+    truck.reset(); debris.length = 0; fighter.reset(110); fighter.look = currentChar.look; shout = null;
     this.phase = 'intro'; this.pt = 0; this.timeLeft = ROUND_TIME;
     this.won = false; this.timeBonus = 0; this.total = 0; this.newBest = false; this.menu = 0;
   },
@@ -734,6 +946,7 @@ states.game = {
     this.pt += dt;
     const live = this.phase === 'play';
     fighter.update(dt, live);
+    if (shout && (shout.t += dt) > 1.1) shout = null;
     truck.update(dt); updateDebris(dt);
 
     if (this.phase === 'intro' && this.pt > 1.4) this.setPhase('play');
@@ -764,6 +977,11 @@ states.game = {
       text(line, 560, GROUND_Y - 66, 10, this.won ? '#ff6a6a' : '#ffe14a');
     }
     truck.draw(); fighter.draw(); drawDebris();
+    if (fighter.sp) {
+      fighter.sp.def.fx(fighter, fighter.sp.t);
+      const lp = fighter.sp.def.lowPoly ? fighter.sp.def.lowPoly(fighter.sp.t) : 0;
+      if (lp > 0) applyLowPoly(lp);                       // faceted "metaverse" look, under the HUD
+    }
     this.drawHud();
     if (this.phase === 'intro') this.drawIntro();
     if (this.phase === 'banner') this.drawBanner();
@@ -779,7 +997,25 @@ states.game = {
     ctx.save(); ctx.translate(W / 2, 34); ctx.scale(pulse, pulse);
     text(String(secs).padStart(2, '0'), 0, 0, 46, low ? '#ff3b30' : '#fff', 'center', '#000');
     ctx.restore();
-    if (this.phase === 'play') text('A/D MOVE   J PUNCH   K KICK', W / 2, H - 14, 11, '#fff');
+    if (this.phase === 'play') text('A/D MOVE  J PUNCH  K KICK  L SPECIAL', W - 16, H - 14, 10, '#fff', 'right');
+    this.drawSpecialMeter();
+    if (shout) {                                          // special move shout, punches in then floats up
+      const k = shout.t < 0.15 ? 1.8 - 0.8 * (shout.t / 0.15) : 1;
+      ctx.save(); ctx.globalAlpha = Math.min(1, (1.1 - shout.t) / 0.3);
+      ctx.translate(Math.max(150, Math.min(W - 150, fighter.x + 20)), 120 - shout.t * 20); ctx.scale(k, k);
+      text(shout.text, 0, 0, 22, shout.color, 'center', '#000'); ctx.restore();
+    }
+  },
+  // 3-second special cooldown meter (bottom-left). Gold + flashing when ready.
+  drawSpecialMeter() {
+    const x = 16, y = H - 30, w = 150, h = 10, ready = fighter.cooldown <= 0 && !fighter.sp;
+    const f = fighter.sp ? 0 : 1 - fighter.cooldown / SPECIAL_COOLDOWN;
+    text('SPECIAL [L]', x, y - 8, 10, '#fff', 'left');
+    rect(x - 2, y - 2, w + 4, h + 4, '#000'); rect(x, y, w, h, '#2a2a40');
+    rect(x, y, w * f, h, ready ? (Math.floor(bgTime * 8) % 2 ? '#ffe14a' : '#fff1a0') : '#4aa3ff');
+    if (ready) text('READY!', x + w + 10, y + 5, 10, '#ffe14a', 'left');
+    else if (fighter.tooFar > 0) text('', x, y, 1, '#fff');
+    if (fighter.tooFar > 0) text('MOVE CLOSER!', x + w + 10, y + 5, 10, '#ff6a6a', 'left');
   },
   drawIntro() {
     const label = this.pt < 0.9 ? 'READY?' : 'SMASH!';
