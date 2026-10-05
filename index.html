@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CYBER SMASH</title>
+<style>
+  /* Full-window black stage; the canvas is centered and scaled by JS (see resize()). */
+  html, body { margin: 0; height: 100%; background: #0b0b14; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges; background: #000; }
+</style>
+</head>
+<body>
+<canvas id="game" width="640" height="360"></canvas>
+<script>
+"use strict";
+/* =====================================================================
+   CYBER SMASH — a parody "destroy the car" bonus stage.
+   Single file, vanilla JS, everything drawn with canvas shapes.
+   ===================================================================== */
+
+// ---------------------------------------------------------------------
+// 1. Core constants & canvas setup
+// ---------------------------------------------------------------------
+const W = 640, H = 360;            // logical resolution (16:9), scaled up by CSS
+const GROUND_Y = 300;              // y of the dock floor where characters stand
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// Scale the canvas to the largest size that fits the window while keeping 16:9.
+// Prefer integer multiples when the window is big enough, to keep pixels crisp.
+function resize() {
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  const scale = s >= 2 ? Math.floor(s * 2) / 2 : s;   // snap to 0.5 steps above 2x
+  canvas.style.width = Math.floor(W * scale) + 'px';
+  canvas.style.height = Math.floor(H * scale) + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---------------------------------------------------------------------
+// 2. Input: keyboard state + one-shot "pressed this frame" events
+// ---------------------------------------------------------------------
+const keys = {};        // currently held keys (by lowercase key name / code)
+const pressed = {};     // keys that went down since the last update tick
+const KEYMAP = {
+  arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right',
+  j: 'punch', k: 'kick', l: 'special',
+  ' ': 'confirm', enter: 'confirm', m: 'mute', escape: 'back',
+  arrowup: 'up', w: 'up', arrowdown: 'down', s: 'down',
+};
+window.addEventListener('keydown', e => {
+  const act = KEYMAP[e.key.toLowerCase()];
+  if (!act) return;
+  e.preventDefault();
+  if (!keys[act]) pressed[act] = true;   // ignore OS key-repeat
+  keys[act] = true;
+});
+window.addEventListener('keyup', e => {
+  const act = KEYMAP[e.key.toLowerCase()];
+  if (act) keys[act] = false;
+});
+// Losing focus must not leave keys "stuck".
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+// ---------------------------------------------------------------------
+// 3. Drawing helpers (chunky pixel-style primitives)
+// ---------------------------------------------------------------------
+function rect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+}
+// Bitmap-ish text using a bold monospace font; shadow gives the arcade look.
+function text(str, x, y, size, color, align = 'center', shadow = '#000') {
+  ctx.font = `bold ${size}px "Courier New", monospace`;
+  ctx.textAlign = align;
+  ctx.textBaseline = 'middle';
+  if (shadow) { ctx.fillStyle = shadow; ctx.fillText(str, Math.round(x) + 2, Math.round(y) + 2); }
+  ctx.fillStyle = color;
+  ctx.fillText(str, Math.round(x), Math.round(y));
+}
+
+// ---------------------------------------------------------------------
+// 4. Harbor background: sky, sea, cargo ships, cranes, crates, dock
+// ---------------------------------------------------------------------
+function drawCargoShip(x, y, scale, hull) {
+  const s = scale;
+  rect(x, y, 150 * s, 18 * s, hull);                     // hull
+  rect(x - 8 * s, y, 8 * s, 10 * s, hull);               // bow slope (blocky)
+  rect(x + 150 * s, y, 6 * s, 10 * s, hull);
+  rect(x, y + 12 * s, 150 * s, 3 * s, '#8a1c1c');        // waterline stripe
+  // container stacks in bright primary colors
+  const cols = ['#d94a2b', '#2b7bd9', '#e8c321', '#3aa655', '#8e44ad'];
+  for (let i = 0; i < 6; i++) {
+    for (let j = 0; j < 2 + (i % 2); j++) {
+      rect(x + 10 * s + i * 22 * s, y - (j + 1) * 12 * s, 20 * s, 11 * s, cols[(i + j) % cols.length]);
+    }
+  }
+  rect(x + 120 * s, y - 30 * s, 24 * s, 30 * s, '#e8e8e8');   // bridge tower
+  rect(x + 124 * s, y - 25 * s, 16 * s, 5 * s, '#4aa3df');    // bridge windows
+}
+function drawCrane(x, y) {
+  const c = '#e0a31a';
+  rect(x, y, 6, 150, c); rect(x + 24, y, 6, 150, c);          // legs
+  rect(x - 40, y, 150, 8, c);                                  // jib
+  rect(x + 80, y + 8, 2, 40, '#333');                          // cable
+  rect(x + 74, y + 48, 14, 10, '#d94a2b');                     // hanging container
+  for (let i = 0; i < 6; i++) rect(x + 6, y + 20 + i * 22, 18, 3, c);   // cross braces
+}
+function drawCrate(x, y, w, h, color) {
+  rect(x, y, w, h, color);
+  rect(x, y, w, 3, 'rgba(255,255,255,.25)');
+  rect(x + 3, y + 3, w - 6, 2, 'rgba(0,0,0,.35)');             // plank lines
+  rect(x + 3, y + h - 5, w - 6, 2, 'rgba(0,0,0,.35)');
+  rect(x, y, 3, h, 'rgba(0,0,0,.3)'); rect(x + w - 3, y, 3, h, 'rgba(0,0,0,.3)');
+  // diagonal brace
+  ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x + 4, y + 4); ctx.lineTo(x + w - 4, y + h - 4); ctx.stroke();
+}
+
+let bgTime = 0;   // drives the gentle wave/seagull animation
+function drawBackground() {
+  // sky: banded gradient (retro style) from dusk orange to teal
+  const bands = ['#2b1b4d', '#4a2a73', '#8a3f8f', '#d9577a', '#f28a5a', '#ffc16b'];
+  for (let i = 0; i < bands.length; i++) rect(0, i * 28, W, 29, bands[i]);
+  rect(470, 130, 46, 46, '#fff3b0');                 // chunky sun
+  rect(476, 124, 34, 6, '#fff3b0'); rect(476, 176, 34, 6, '#fff3b0');
+  // sea
+  rect(0, 172, W, 128, '#1b4f8a');
+  for (let i = 0; i < 14; i++) {                     // animated wave dashes
+    const wx = ((i * 53 + bgTime * 20) % (W + 40)) - 20;
+    rect(wx, 185 + (i % 5) * 20, 18, 2, '#3d8fd1');
+  }
+  // far ships + crane silhouettes
+  drawCargoShip(40, 160, 1, '#2a2f3a');
+  drawCargoShip(330, 168, 0.8, '#3a2f2a');
+  drawCrane(560, 60);
+  // seagull
+  const gx = (bgTime * 25) % (W + 60) - 30, gy = 70 + Math.sin(bgTime * 2) * 6;
+  rect(gx, gy, 6, 2, '#fff'); rect(gx + 6, gy - 2, 6, 2, '#fff'); rect(gx + 12, gy, 6, 2, '#fff');
+  // dock: planks + crates
+  rect(0, 262, W, 98, '#6b4a2b');
+  rect(0, 262, W, 6, '#8a6238');
+  for (let i = 0; i < 16; i++) rect(i * 42, 268, 2, 92, '#4a321d');  // plank seams
+  rect(0, GROUND_Y + 16, W, 44, '#4a321d');
+  drawCrate(10, 226, 40, 40, '#a8742f'); drawCrate(54, 238, 28, 28, '#8f5f26');
+  drawCrate(14, 190, 30, 36, '#b8832f');
+  drawCrate(590, 230, 44, 36, '#9c6a2a'); drawCrate(560, 244, 28, 22, '#b8832f');
+  // bollards along the quay edge
+  for (let i = 0; i < 5; i++) { rect(90 + i * 120, 252, 8, 10, '#222'); rect(88 + i * 120, 250, 12, 3, '#555'); }
+}
+
+// The shady salesman (right side, watching nervously). `mood` 0=smug, 1=nervous, 2=panic.
+function drawSalesman(x, y, mood, t) {
+  const sweat = mood > 0 && Math.floor(t * 4) % 2 === 0;
+  rect(x - 8, y - 30, 16, 22, '#3b3b6b');            // suit
+  rect(x - 2, y - 30, 4, 18, '#e03a3a');             // loud tie
+  rect(x - 7, y - 8, 6, 10, '#222'); rect(x + 1, y - 8, 6, 10, '#222');   // legs
+  rect(x - 9, y - 46, 18, 16, '#f2c9a0');            // big head
+  rect(x - 10, y - 48, 20, 5, '#222');               // slick hair
+  rect(x - 6, y - 40, 4, 4, '#fff'); rect(x + 2, y - 40, 4, 4, '#fff');   // eyes
+  rect(x - 5 + (mood > 0 ? 1 : 0), y - 39, 2, 2, '#000'); rect(x + 3 + (mood > 0 ? 1 : 0), y - 39, 2, 2, '#000');
+  rect(x - 8, y - 43, 5, 1, '#222'); rect(x + 3, y - 43, 5, 1, '#222');   // brows
+  if (mood === 2) rect(x - 3, y - 34, 6, 5, '#600'); // mouth agape
+  else rect(x - 4, y - 33, 8, 2, mood === 1 ? '#7a3b2e' : '#d9534f');
+  if (sweat) rect(x + 10, y - 44, 3, 5, '#7fd4ff');  // sweat drop
+  rect(x + 8, y - 24, 12, 8, '#2a7a3a');             // clutching a wad of cash
+  text('$', x + 14, y - 20, 8, '#d7f7c2', 'center', null);
+}
+
+// ---------------------------------------------------------------------
+// 5. Game state machine
+//    Each state is {enter(), update(dt), draw()}. PRs 2+ add more states.
+// ---------------------------------------------------------------------
+const states = {};
+let state = null, stateName = '';
+function setState(name, arg) {
+  stateName = name; state = states[name];
+  if (state.enter) state.enter(arg);
+}
+
+// Title screen (character select arrives in a later PR)
+states.title = {
+  t: 0,
+  enter() { this.t = 0; },
+  update(dt) {
+    this.t += dt;
+    if (pressed.confirm) { /* next PR: go to character select */ }
+  },
+  draw() {
+    drawBackground();
+    drawSalesman(520, GROUND_Y, 1, this.t);
+    // big title with a bobbing shadow
+    const bob = Math.sin(this.t * 3) * 3;
+    text('CYBER', W / 2, 70 + bob, 56, '#ffe14a', 'center', '#7a1d1d');
+    text('SMASH', W / 2, 120 + bob, 56, '#ff5a3c', 'center', '#3a0d0d');
+    text('Wreck the CYBERCHUNK in 40 seconds!', W / 2, 168, 14, '#fff');
+    if (Math.floor(this.t * 2) % 2 === 0) text('PRESS SPACE / ENTER', W / 2, 330, 16, '#fff');
+  },
+};
+
+// ---------------------------------------------------------------------
+// 6. Main loop: fixed 60 Hz update, render every animation frame
+// ---------------------------------------------------------------------
+const STEP = 1 / 60;
+let last = performance.now(), acc = 0;
+function frame(now) {
+  // clamp big gaps (tab switch) so we don't run a burst of catch-up updates
+  acc += Math.min(0.25, (now - last) / 1000);
+  last = now;
+  while (acc >= STEP) {
+    bgTime += STEP;
+    state.update(STEP);
+    for (const k in pressed) delete pressed[k];   // consume one-shot presses
+    acc -= STEP;
+  }
+  ctx.clearRect(0, 0, W, H);
+  state.draw();
+  requestAnimationFrame(frame);
+}
+
+setState('title');
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
