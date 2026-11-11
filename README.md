@@ -6,6 +6,8 @@ anyone who can wreck it with their bare hands in **under 40 seconds**.
 
 **▶ Play it: https://fsystemweb.github.io/cybersmash/**
 
+**🆕 Play the sequel — [CYBER SMASH II](https://fsystemweb.github.io/cybersmash-II/)** ([source](https://github.com/fsystemweb/cybersmash-II))
+
 Everything lives in a single [`index.html`](index.html): vanilla JS + `<canvas>`, **no images, sprites, fonts or libraries**.
 Every pixel is drawn with canvas shapes and every sound is synthesized with the Web Audio API.
 You can also just download the file and open it in a browser.
